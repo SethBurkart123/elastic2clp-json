@@ -49,14 +49,60 @@ def setup_clp_json():
         run_sudo_command(["apt", "install", "-y", "wget", "tar"], password)
         
         if shutil.which("docker") is None:
-            print("Installing Docker...")
-            run_sudo_command(["apt", "install", "-y", "docker.io", "docker-compose-plugin"], password)
-            run_sudo_command(["systemctl", "start", "docker"], password)
-            run_sudo_command(["systemctl", "enable", "docker"], password)
-        if shutil.which("docker-compose") is None:
-            print("Installing Docker Compose plugin...")
-            run_sudo_command(["apt", "install", "-y", "docker-compose-plugin"], password)
-    
+            print("Installing Docker using official repository...")
+            run_sudo_command(["apt", "install", "-y", "ca-certificates", "curl"], password)
+            run_sudo_command(["install", "-m", "0755", "-d", "/etc/apt/keyrings"], password)
+            
+            curl_process = subprocess.Popen(
+                ["curl", "-fsSL", "https://download.docker.com/linux/ubuntu/gpg"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            gpg_data, curl_stderr = curl_process.communicate()
+            if curl_process.returncode != 0:
+                raise subprocess.CalledProcessError(curl_process.returncode, ["curl"], curl_stderr.decode())
+            
+            tee_process = subprocess.Popen(
+                ["sudo", "-S", "tee", "/etc/apt/keyrings/docker.asc"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            tee_stdout, tee_stderr = tee_process.communicate(input=(password + "\n").encode() + gpg_data)
+            if tee_process.returncode != 0:
+                raise subprocess.CalledProcessError(tee_process.returncode, ["tee"], tee_stderr.decode())
+            
+            run_sudo_command(["chmod", "a+r", "/etc/apt/keyrings/docker.asc"], password)
+            
+            codename_result = subprocess.run(
+                ["bash", "-c", '. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}"'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            codename = codename_result.stdout.strip()
+            
+            sources_content = f"""Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: {codename}
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+"""
+            
+            tee_process = subprocess.Popen(
+                ["sudo", "-S", "tee", "/etc/apt/sources.list.d/docker.sources"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            tee_stdout, tee_stderr = tee_process.communicate(input=password + "\n" + sources_content)
+            if tee_process.returncode != 0:
+                raise subprocess.CalledProcessError(tee_process.returncode, ["tee"], tee_stderr)
+            
+            run_sudo_command(["apt", "update"], password)
+            run_sudo_command(["apt", "install", "-y", "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"], password)
+            
     print("Downloading CLP-JSON...")
     subprocess.run(["wget", CLP_JSON_URL], check=True)
     print("Extracting CLP-JSON...")
