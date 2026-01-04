@@ -1,0 +1,21 @@
+{
+  "indexers": [
+    {
+      "name": "production",
+      "host": "http://prod-es:9200/*/_search",
+      "user": "prod_user",
+      "password": "prod_pass",
+      "output_dir": "./logs/production",
+      "interval": 20.0
+    },
+    {
+      "name": "staging",
+      "host": "http://stage-es:9200/*/_search",
+      "user": "stage_user",
+      "password": "stage_pass",
+      "output_dir": "./logs/staging",
+      "interval": 30.0
+    }
+  ]
+}
+

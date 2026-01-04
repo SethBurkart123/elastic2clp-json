@@ -1,0 +1,15 @@
+.env
+
+.venv/
+__pycache__/
+
+output.log
+ingestion_state.json
+ingestion_state.json.tmp
+logs/
+logs_*.jsonl
+output.log
+clp-json-x86_64-v0.7.0/
+
+# Hide files that contain indexer information
+indexers.json
