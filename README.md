@@ -240,6 +240,87 @@ In continuous mode, the script will:
 
 **Note**: CLP-JSON must be set up before running in continuous mode. Run `uv run setup_clp_json.py` first.
 
+#### Running as a systemd Service (Recommended for Production)
+
+For production deployments, it's recommended to run the ingestion service as a systemd service. This provides automatic startup on boot, automatic restarts on failure, and proper logging via systemd journal.
+
+**Quick Setup:**
+
+```bash
+sudo ./manage-service.sh
+```
+
+**Manual Setup Instructions:**
+
+1. **Edit the service file** - Copy and customize the service file:
+   ```bash
+   cp elastic2clp-json.service /tmp/elastic2clp-json.service
+   nano /tmp/elastic2clp-json.service
+   ```
+
+2. **Update the service file** - Replace the placeholders:
+   - `YOUR_USERNAME`: Replace with the user account that will run the service (e.g., `sethburkart`)
+   - `/path/to/elastic2log`: Replace with the absolute path to your project directory (e.g., `/home/sethburkart/elastic2log`)
+
+3. **Install the service**:
+   ```bash
+   sudo cp /tmp/elastic2clp-json.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   ```
+
+4. **Enable and start the service**:
+   ```bash
+   sudo systemctl enable elastic2clp-json.service
+   sudo systemctl start elastic2clp-json.service
+   ```
+
+5. **Check service status**:
+   ```bash
+   sudo systemctl status elastic2clp-json.service
+   ```
+
+6. **View logs**:
+   ```bash
+   # View recent logs
+   sudo journalctl -u elastic2clp-json.service -n 50
+   
+   # Follow logs in real-time
+   sudo journalctl -u elastic2clp-json.service -f
+   ```
+
+**Service Management:**
+
+```bash
+sudo ./manage-service.sh
+```
+
+Or use systemctl directly:
+```bash
+# Start the service
+sudo systemctl start elastic2clp-json.service
+
+# Stop the service
+sudo systemctl stop elastic2clp-json.service
+
+# Restart the service
+sudo systemctl restart elastic2clp-json.service
+
+# Check service status
+sudo systemctl status elastic2clp-json.service
+
+# Disable automatic startup on boot
+sudo systemctl disable elastic2clp-json.service
+
+# Enable automatic startup on boot
+sudo systemctl enable elastic2clp-json.service
+```
+
+**Notes:**
+- Service runs in continuous mode automatically
+- Automatically restarts on failure
+- Configuration changes to `indexers.json` are picked up within 30 seconds
+- Ensure the service user has Docker access (if using CLP-JSON compression)
+
 #### Skip CLP-JSON Compression
 
 Save logs as JSON files without compressing to CLP-JSON:

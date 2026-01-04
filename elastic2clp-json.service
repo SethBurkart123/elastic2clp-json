@@ -6,11 +6,12 @@ After=network.target
 Type=simple
 User=YOUR_USERNAME
 WorkingDirectory=/path/to/elastic2log
-ExecStart=/usr/bin/uv run ingest_logs.py --continuous
+ExecStart=UV_PATH run ingest_logs.py --continuous
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+Environment="PATH=HOME_LOCAL_BIN:/usr/local/bin:/usr/bin:/bin"
 
 [Install]
 WantedBy=multi-user.target
