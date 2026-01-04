@@ -1,6 +1,6 @@
 # elastic2clp-json
 
-A robust Elasticsearch log ingestion tool that efficiently extracts logs from Elasticsearch and saves them as JSONL files for further processing (like CLP-JSON ingestion). Supports multiple indexers with independent configuration, state tracking, and output paths.
+A robust Elasticsearch log ingestion tool that efficiently extracts logs from Elasticsearch and directly compresses them into CLP-JSON archives with automatic archive joining support. Supports multiple indexers with independent configuration, state tracking, and output paths.
 
 ## Features
 
@@ -11,6 +11,8 @@ A robust Elasticsearch log ingestion tool that efficiently extracts logs from El
 - **Flexible time-based ingestion modes** - Forward from checkpoint, backward from date, or reset
 - **Configurable query intervals** - Set per-indexer or override via CLI (from seconds to hours)
 - **CLI indexer management** - Add new indexers from the command line
+- **Direct CLP-JSON compression** - Automatically compresses ingested logs to CLP-JSON archives
+- **Archive joining support** - Automatically merges small archives to optimize storage
 - **Timestamped output files** - Organized log storage with automatic directory creation
 - **Atomic state management** - Prevent data loss on failures
 - **Smart result limit detection** - Automatically splits queries when hitting Elasticsearch limits
@@ -95,8 +97,9 @@ Indexers are configured in `indexers.json`. The file is automatically created wh
 - `host` (required) - Elasticsearch search endpoint URL (include `/*/_search` pattern)
 - `user` (required) - Elasticsearch username
 - `password` (required) - Elasticsearch password
-- `output_dir` (required) - Directory where logs will be saved (created automatically)
+- `output_dir` (required) - Directory where logs will be temporarily saved before compression (created automatically)
 - `interval` (optional) - Query interval in minutes (default: 20.0)
+- `timestamp_key` (optional) - Field name for timestamps in log documents (default: "timestamp")
 
 ### Managing Indexers
 
@@ -109,7 +112,8 @@ uv run ingest_logs.py --add-indexer \
   --user username \
   --password password \
   --output-dir ./logs/myindexer \
-  --interval 15.0
+  --interval 15.0 \
+  --timestamp-key timestamp
 ```
 
 #### List Configured Indexers
@@ -124,11 +128,12 @@ uv run ingest_logs.py --list-indexers
 
 ```
 usage: ingest_logs.py [-h] [--from-date DATETIME | --reset] [--indexer NAME] 
-                      [--list-indexers] [--interval MINUTES] 
+                      [--list-indexers] [--interval MINUTES] [--no-clp-json]
                       [--add-indexer] [--indexer-name NAME] [--host URL] 
                       [--user USERNAME] [--password PASSWORD] [--output-dir DIR]
+                      [--timestamp-key KEY]
 
-Ingest logs from Elasticsearch (multi-indexer support)
+Ingest logs from Elasticsearch and compress to CLP-JSON (multi-indexer support)
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -137,12 +142,14 @@ optional arguments:
   --indexer NAME        Run only the specified indexer (default: run all)
   --list-indexers       List all configured indexers and exit
   --interval MINUTES    Query interval in minutes (overrides config, can use decimals e.g. 0.5 for 30 seconds)
+  --no-clp-json         Skip CLP-JSON compression (default: compress to CLP-JSON)
   --add-indexer         Add a new indexer (requires --indexer-name, --host, --user, --password, --output-dir)
   --indexer-name NAME   Name for the new indexer (used with --add-indexer)
   --host URL            Elasticsearch host URL (used with --add-indexer)
   --user USERNAME       Elasticsearch username (used with --add-indexer)
   --password PASSWORD   Elasticsearch password (used with --add-indexer)
   --output-dir DIR      Output directory for logs (used with --add-indexer)
+  --timestamp-key KEY   Timestamp key field name (used with --add-indexer, default: timestamp)
 ```
 
 ### Examples
@@ -198,6 +205,13 @@ uv run ingest_logs.py --reset
 uv run ingest_logs.py --indexer production --reset
 ```
 
+#### Skip CLP-JSON Compression
+
+Save logs as JSON files without compressing to CLP-JSON:
+```bash
+uv run ingest_logs.py --no-clp-json
+```
+
 #### Combine Options
 
 ```bash
@@ -233,11 +247,14 @@ uv run ingest_logs.py --indexer staging --reset --interval 30
 
 6. **Error Handling**: If ingestion fails, the state file isn't updated for that indexer, allowing the next run to retry from the same point.
 
-7. **Output Format**: Logs are saved as JSONL (one JSON object per line) with timestamped filenames like `logs_2024-10-27_13-04-52.jsonl` in each indexer's output directory.
+7. **CLP-JSON Compression**: After ingestion, logs are automatically compressed to CLP-JSON archives. The tool runs archive merging twice to combine small archives, optimizing storage. JSON files are automatically removed after successful compression.
+
+8. **Output Format**: Logs are temporarily saved as JSON files with timestamped filenames like `logs_2024-10-27_13-04-52.json` in each indexer's output directory, then compressed to CLP-JSON archives and removed.
 
 ## Output Files
 
-- **Log files**: `logs_YYYY-MM-DD_HH-MM-SS.jsonl` in each indexer's output directory
+- **CLP-JSON archives**: Compressed archives stored in CLP-JSON's configured storage (see `clp-config.yaml`)
+- **Temporary JSON files**: `logs_YYYY-MM-DD_HH-MM-SS.json` in each indexer's output directory (removed after compression)
 - **State file**: `ingestion_state.json` - Tracks last successful ingestion time per indexer
 - **Lock files**: `/tmp/log_ingestion_{indexer_name}.lock` - Prevents concurrent execution (automatically cleaned up)
 - **Config file**: `indexers.json` - Indexer configurations
@@ -248,8 +265,9 @@ uv run ingest_logs.py --indexer staging --reset --interval 30
 indexers.json
 ingestion_state.json
 ingestion_state.json.tmp
-logs_*.jsonl
-*.jsonl
+logs_*.json
+*.json
+clp-json-x86_64-v0.7.0/
 ```
 
 ## Troubleshooting

@@ -239,7 +239,6 @@ def compress_to_clp_json(indexer_name, timestamp_key, output_dir):
         print("Warning: clp-json compress.sh not found. Skipping compression.")
         return False
     
-    # Collect all JSON files before compression
     output_path = Path(output_dir)
     json_files = list(output_path.glob("*.json"))
     
@@ -255,7 +254,6 @@ def compress_to_clp_json(indexer_name, timestamp_key, output_dir):
         for _ in range(2):
             merge_archives(indexer_name, timestamp_key)
         
-        # Remove all JSON files that were compressed
         removed_count = 0
         for json_file in json_files:
             if json_file.exists():
@@ -385,7 +383,7 @@ def main():
     parser.add_argument('--output-dir', type=str, metavar='DIR',
                         help='Output directory for logs (used with --add-indexer)')
     parser.add_argument('--timestamp-key', type=str, metavar='KEY',
-                        help='Timestamp key field name (used with --add-indexer, default: timestamp)')
+                        help='Timestamp key field name (used with --add-indexer, default: timestamp). Can be quoted to include spaces.')
     parser.add_argument('--no-clp-json', action='store_true',
                         help='Skip clp-json compression (default: compress to clp-json)')
     
