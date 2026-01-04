@@ -21,7 +21,6 @@ CONTINUOUS_INTERVAL = 30
 shutdown_requested = False
 
 def parse_datetime(date_string):
-    """Parse datetime string in various formats"""
     try:
         return datetime.fromisoformat(date_string.replace('Z', '+00:00'))
     except ValueError:
@@ -34,20 +33,24 @@ def parse_datetime(date_string):
                 raise argparse.ArgumentTypeError(f"Invalid date format: '{date_string}'. Use YYYY-MM-DD or YYYY-MM-DD HH:MM:SS")
 
 def positive_float(value):
-    """Validate positive float for interval argument"""
     fvalue = float(value)
     if fvalue <= 0:
         raise argparse.ArgumentTypeError(f"{value} must be positive")
     return fvalue
 
 def load_indexers():
-    """Load indexers from JSON config file"""
     if not Path(CONFIG_FILE).exists():
         save_indexers_config({'indexers': []})
         return {}
     
-    with open(CONFIG_FILE, 'r') as f:
-        config = json.load(f)
+    lock_file = f"/tmp/{CONFIG_FILE}.lock"
+    with open(lock_file, 'w') as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_SH)
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
     
     if 'indexers' not in config:
         print(f"Error: '{CONFIG_FILE}' must contain an 'indexers' array")
@@ -83,14 +86,18 @@ def load_indexers():
     return indexers
 
 def save_indexers_config(config):
-    """Save indexers config to JSON file"""
     temp_file = f"{CONFIG_FILE}.tmp"
-    with open(temp_file, 'w') as f:
-        json.dump(config, f, indent=2)
-    os.rename(temp_file, CONFIG_FILE)
+    lock_file = f"/tmp/{CONFIG_FILE}.lock"
+    with open(lock_file, 'w') as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            with open(temp_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            os.rename(temp_file, CONFIG_FILE)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 def add_indexer(name, host, user, password, interval=20.0, timestamp_key='timestamp'):
-    """Add a new indexer to the config file"""
     if Path(CONFIG_FILE).exists():
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
@@ -119,7 +126,6 @@ def add_indexer(name, host, user, password, interval=20.0, timestamp_key='timest
     print(f"Added indexer '{name}' successfully")
 
 def load_state():
-    """Load last ingestion time from state file (per-indexer)"""
     if Path(STATE_FILE).exists():
         with open(STATE_FILE, 'r') as f:
             state = json.load(f)
@@ -127,7 +133,6 @@ def load_state():
     return {}
 
 def save_state(all_indexer_states):
-    """Atomically save state to file (per-indexer)"""
     temp_file = f"{STATE_FILE}.tmp"
     state = {'indexers': all_indexer_states}
     
@@ -140,26 +145,28 @@ def save_state(all_indexer_states):
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
-def update_indexer_state(indexer_name, last_ingest_time, all_indexer_states):
-    """Update state for a specific indexer"""
-    all_indexer_states[indexer_name] = {'last_ingest_time': last_ingest_time.isoformat()}
-    save_state(all_indexer_states)
+def update_indexer_state(indexer_name, last_ingest_time):
+    lock_file = f"/tmp/{STATE_FILE}.lock"
+    with open(lock_file, 'w') as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            all_indexer_states = load_state()
+            all_indexer_states[indexer_name] = {'last_ingest_time': last_ingest_time.isoformat()}
+            save_state(all_indexer_states)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 def is_indexer_running(indexer_name):
-    """Check if an indexer is currently running by attempting to acquire lock"""
     lock_file = f"/tmp/log_ingestion_{indexer_name}.lock"
-    if not Path(lock_file).exists():
-        return False
-    
     try:
         with open(lock_file, 'w') as lock_fd:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.remove(lock_file)
             return False
     except IOError:
         return True
 
 def acquire_lock(indexer_name):
-    """Acquire exclusive lock for a specific indexer"""
     lock_file = f"/tmp/log_ingestion_{indexer_name}.lock"
     lock_fd = open(lock_file, 'w')
     try:
@@ -170,7 +177,6 @@ def acquire_lock(indexer_name):
         sys.exit(1)
 
 def release_lock(lock_fd, lock_file):
-    """Release lock and clean up lock file"""
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         lock_fd.close()
@@ -180,11 +186,9 @@ def release_lock(lock_fd, lock_file):
         pass
 
 def get_log_filepath(output_dir):
-    """Generate log file path with timestamp"""
-    return Path(output_dir) / f"logs_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+    return Path(output_dir) / f"logs_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')}.json"
 
 def query_with_splitting(indexer, start_time, end_time, log_file, depth=0):
-    """Query a time range, splitting if we hit the limit"""
     hits = elastic_search(indexer['host'], indexer['user'], indexer['password'], start_time, end_time, MAX_RESULTS)
     
     if len(hits) >= MAX_RESULTS - 2:
@@ -213,7 +217,6 @@ def query_with_splitting(indexer, start_time, end_time, log_file, depth=0):
     return len(hits)
 
 def ingest_backwards(indexer, indexer_name, end_time, output_path, interval_minutes, compress=True):
-    """Ingest backwards until 5 days of no logs"""
     query_interval = timedelta(minutes=interval_minutes)
     total_logs = 0
     empty_days = 0
@@ -252,7 +255,6 @@ def ingest_backwards(indexer, indexer_name, end_time, output_path, interval_minu
             compress_to_clp_json(indexer_name, indexer['timestamp_key'], output_path.parent)
 
 def compress_to_clp_json(indexer_name, timestamp_key, output_dir):
-    """Compress json files in output_dir to clp-json"""
     if not is_clp_json_setup():
         print("Error: CLP-JSON is not set up. Please run 'uv run setup_clp_json.py' first.")
         return False
@@ -262,8 +264,7 @@ def compress_to_clp_json(indexer_name, timestamp_key, output_dir):
         print("Warning: clp-json compress.sh not found. Skipping compression.")
         return False
     
-    output_path = Path(output_dir)
-    json_files = list(output_path.glob("*.json"))
+    json_files = list(Path(output_dir).glob("*.json"))
     
     if not json_files:
         return False
@@ -277,14 +278,12 @@ def compress_to_clp_json(indexer_name, timestamp_key, output_dir):
         for _ in range(2):
             merge_archives(indexer_name, timestamp_key)
         
-        removed_count = 0
         for json_file in json_files:
             if json_file.exists():
                 json_file.unlink()
-                removed_count += 1
         
-        if removed_count > 0:
-            print(f"Compressed to clp-json and removed {removed_count} JSON file(s)")
+        if json_files:
+            print(f"Compressed to clp-json and removed {len(json_files)} JSON file(s)")
         
         return True
     except subprocess.CalledProcessError as e:
@@ -292,7 +291,6 @@ def compress_to_clp_json(indexer_name, timestamp_key, output_dir):
         return False
 
 def ingest_forward(indexer, indexer_name, start_time, end_time, output_path, interval_minutes, save_checkpoint=True, compress=True):
-    """Ingest forward from start_time to end_time"""
     query_interval = timedelta(minutes=interval_minutes)
     total_logs = 0
     
@@ -312,7 +310,7 @@ def ingest_forward(indexer, indexer_name, start_time, end_time, output_path, int
         print("No logs found. File not created.")
     else:
         if save_checkpoint:
-            update_indexer_state(indexer_name, end_time, load_state())
+            update_indexer_state(indexer_name, end_time)
         print(f"Ingestion complete. Total logs: {total_logs}")
         print(f"Saved to: {output_path}")
         
@@ -323,8 +321,7 @@ def signal_handler(signum, frame):
     global shutdown_requested
     shutdown_requested = True
 
-def run_indexer(indexer_name, indexer, args, all_indexer_states):
-    """Run ingestion for a single indexer"""
+def run_indexer(indexer_name, indexer, args):
     print(f"\n{'='*60}")
     print(f"Indexer: {indexer_name}")
     print(f"Host: {indexer['host']}")
@@ -353,6 +350,7 @@ def run_indexer(indexer_name, indexer, args, all_indexer_states):
             ingest_forward(indexer, indexer_name, start_time, current_time, output_path, interval, True, compress)
             
         else:
+            all_indexer_states = load_state()
             indexer_state = all_indexer_states.get(indexer_name, {})
             if indexer_state.get('last_ingest_time'):
                 start_time = datetime.fromisoformat(indexer_state['last_ingest_time'])
@@ -363,7 +361,7 @@ def run_indexer(indexer_name, indexer, args, all_indexer_states):
                 print(f"First run for indexer '{indexer_name}': ingesting all previous logs")
                 print(f"Using {interval} minute intervals")
                 ingest_backwards(indexer, indexer_name, current_time, output_path, interval, compress)
-                update_indexer_state(indexer_name, current_time, all_indexer_states)
+                update_indexer_state(indexer_name, current_time)
         
     except Exception as e:
         print(f"Error during ingestion for '{indexer_name}': {e}")
@@ -486,8 +484,6 @@ def main():
                 time.sleep(CONTINUOUS_INTERVAL)
                 continue
             
-            all_indexer_states = load_state()
-            
             for indexer_name, indexer in indexers_to_run.items():
                 if shutdown_requested:
                     break
@@ -499,7 +495,7 @@ def main():
                     last_run_times[indexer_name] = time.time()
                     threading.Thread(
                         target=run_indexer,
-                        args=(indexer_name, indexer, args, all_indexer_states),
+                        args=(indexer_name, indexer, args),
                         daemon=True
                     ).start()
             
@@ -512,7 +508,7 @@ def main():
     else:
         for indexer_name, indexer in indexers_to_run.items():
             try:
-                run_indexer(indexer_name, indexer, args, all_indexer_states)
+                run_indexer(indexer_name, indexer, args)
             except Exception as e:
                 print(f"Failed to process indexer '{indexer_name}': {e}")
                 if len(indexers_to_run) == 1:
