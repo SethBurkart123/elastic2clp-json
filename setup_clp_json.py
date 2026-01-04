@@ -53,7 +53,10 @@ def setup_clp_json():
             run_sudo_command(["apt", "install", "-y", "docker.io", "docker-compose-plugin"], password)
             run_sudo_command(["systemctl", "start", "docker"], password)
             run_sudo_command(["systemctl", "enable", "docker"], password)
-        
+        if shutil.which("docker-compose") is None:
+            print("Installing Docker Compose plugin...")
+            run_sudo_command(["apt", "install", "-y", "docker-compose-plugin"], password)
+    
     print("Downloading CLP-JSON...")
     subprocess.run(["wget", CLP_JSON_URL], check=True)
     print("Extracting CLP-JSON...")
