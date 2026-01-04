@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from elastic_search import elastic_search
-from setup_clp_json import setup_clp_json, is_clp_json_setup
+from setup_clp_json import is_clp_json_setup
 from merge_archives import merge_archives
 
 CONFIG_FILE = 'indexers.json'
@@ -254,9 +254,8 @@ def ingest_backwards(indexer, indexer_name, end_time, output_path, interval_minu
 def compress_to_clp_json(indexer_name, timestamp_key, output_dir):
     """Compress json files in output_dir to clp-json"""
     if not is_clp_json_setup():
-        if not setup_clp_json():
-            print("Warning: Failed to setup clp-json. Skipping compression.")
-            return False
+        print("Error: CLP-JSON is not set up. Please run 'uv run setup_clp_json.py' first.")
+        return False
     
     compress_script = Path("clp-json-x86_64-v0.7.0/sbin/compress.sh")
     if not compress_script.exists():

@@ -37,6 +37,22 @@ Install dependencies:
 uv sync
 ```
 
+### 2. Setup CLP-JSON (Required for Compression)
+
+Before running ingestion, you must set up CLP-JSON. This only needs to be done once and requires sudo access:
+
+```bash
+uv run setup_clp_json.py
+```
+
+This will:
+- Install system dependencies (wget, tar, Docker if needed)
+- Download and extract CLP-JSON
+- Configure CLP-JSON services
+- Set up Docker group permissions
+
+**Note**: You will be prompted for your sudo password during setup. On Linux, you may need to log out and back in after setup for Docker group changes to take effect.
+
 ## Quick Start
 
 ### 1. Add Your First Indexer
@@ -54,8 +70,11 @@ uv run ingest_logs.py --add-indexer \
 ### 2. Run Ingestion
 
 ```bash
-# Run all configured indexers
+# Run all configured indexers (one-time)
 uv run ingest_logs.py
+
+# Or run continuously (recommended for production)
+uv run ingest_logs.py --continuous
 
 # Or run a specific indexer
 uv run ingest_logs.py --indexer production
@@ -202,6 +221,25 @@ uv run ingest_logs.py --reset
 uv run ingest_logs.py --indexer production --reset
 ```
 
+#### Continuous Mode
+
+Run continuously, checking every 30 seconds for new logs:
+```bash
+# Run all indexers continuously
+uv run ingest_logs.py --continuous
+
+# Run a specific indexer continuously
+uv run ingest_logs.py --indexer production --continuous
+```
+
+In continuous mode, the script will:
+- Check every 30 seconds if ingestion is needed
+- Automatically run ingestion for each indexer when new logs are available
+- Run each indexer in a separate thread to allow parallel processing
+- Gracefully handle shutdown signals (Ctrl+C or SIGTERM)
+
+**Note**: CLP-JSON must be set up before running in continuous mode. Run `uv run setup_clp_json.py` first.
+
 #### Skip CLP-JSON Compression
 
 Save logs as JSON files without compressing to CLP-JSON:
@@ -269,6 +307,8 @@ clp-json-x86_64-v0.7.0/
 
 ## Troubleshooting
 
+**"CLP-JSON is not set up"**: Run `uv run setup_clp_json.py` first. This only needs to be done once and requires sudo access.
+
 **"No indexers configured"**: Add an indexer using `--add-indexer` or create `indexers.json` manually.
 
 **"Another instance is already running for indexer '{name}'"**: Check if another process is running that indexer, or manually remove `/tmp/log_ingestion_{name}.lock` if a previous run crashed.
@@ -280,3 +320,5 @@ clp-json-x86_64-v0.7.0/
 **Missing logs**: Check `ingestion_state.json` to see the last successful ingestion time for each indexer. Use `--reset` or `--from-date` to re-ingest if needed.
 
 **HTTP errors from Elasticsearch**: Check your Elasticsearch host URL, credentials, and network connectivity.
+
+**Docker permission errors**: After running `setup_clp_json.py`, you may need to log out and back in for Docker group changes to take effect. Alternatively, run `newgrp docker` in your current shell.

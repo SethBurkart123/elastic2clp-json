@@ -196,18 +196,27 @@ def merge_archives(dataset, timestamp_key, size_threshold=DEFAULT_SIZE_THRESHOLD
         combined_file = temp_dir / "combined.json"
         
         try:
+            lines_written = 0
             with open(combined_file, 'w') as outf:
                 for archive in archives:
                     json_files = extract_archive(archive["id"], dataset)
                     if json_files is None:
                         return False
+                    if not json_files:
+                        print(f"Warning: No JSON files extracted from archive {archive['id']}")
+                        continue
                     for json_file in json_files:
                         with open(json_file, 'r') as inf:
                             for line in inf:
                                 if line.strip():
                                     outf.write(line.strip() + '\n')
+                                    lines_written += 1
             
-            if not compress_files(combined_file, dataset, timestamp_key):
+            if lines_written == 0:
+                print(f"Warning: combined.json is empty, skipping compression")
+                return False
+            
+            if not compress_files(combined_file.resolve(), dataset, timestamp_key):
                 return False
             
             if not delete_archives(dataset, [a["id"] for a in archives]):
