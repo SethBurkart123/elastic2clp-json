@@ -13,6 +13,7 @@ def is_clp_json_setup():
     return CLP_JSON_DIR.exists() and (CLP_JSON_DIR / "sbin" / "compress.sh").exists()
 
 def run_sudo_command(cmd, password=None):
+    """Run a sudo command, prompting for password if needed"""
     if password is None:
         password = getpass.getpass("Enter sudo password: ")
     

@@ -67,11 +67,9 @@ def get_db_connection():
 def get_smallest_archives(dataset, size_threshold):
     conn = get_db_connection()
     try:
-        conn.autocommit(False)
         with conn.cursor() as cursor:
             cursor.execute("SELECT name FROM `clp_datasets` WHERE name = %s", (dataset,))
             if not cursor.fetchone():
-                conn.rollback()
                 return None
 
             archives_table = f"`clp_{dataset}_archives`"
@@ -81,27 +79,19 @@ def get_smallest_archives(dataset, size_threshold):
                 WHERE uncompressed_size > 0
                 ORDER BY uncompressed_size ASC
                 LIMIT 2
-                FOR UPDATE
             """)
             archives = cursor.fetchall()
 
             if len(archives) < 2:
-                conn.rollback()
                 return None
 
             if archives[0][2] + archives[1][2] >= size_threshold:
-                conn.rollback()
                 return None
 
-            result = [
+            return [
                 {"id": archives[0][0], "size": archives[0][1], "uncompressed_size": archives[0][2]},
                 {"id": archives[1][0], "size": archives[1][1], "uncompressed_size": archives[1][2]}
             ]
-            conn.commit()
-            return result
-    except Exception:
-        conn.rollback()
-        raise
     finally:
         conn.close()
 
@@ -138,9 +128,11 @@ def extract_archive(archive_id, dataset):
             return None
         
         json_files = list(stream_output_dir.glob("*.json"))
+        json_files.extend(stream_output_dir.glob("*.json"))
         
         for subdir in stream_output_dir.iterdir():
             if subdir.is_dir():
+                json_files.extend(subdir.glob("*.json"))
                 json_files.extend(subdir.glob("*.json"))
         
         return json_files
@@ -197,8 +189,7 @@ def merge_archives(dataset, timestamp_key, size_threshold=DEFAULT_SIZE_THRESHOLD
         if not archives:
             return False
         
-        archive_ids = [a["id"] for a in archives]
-        print(f"Merging archives {archive_ids[0]} and {archive_ids[1]}")
+        print(f"Merging archives {archives[0]['id']} and {archives[1]['id']}")
         
         temp_dir = CLP_JSON_DIR / "var" / "tmp" / f"merge_{dataset}_{os.getpid()}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -228,10 +219,10 @@ def merge_archives(dataset, timestamp_key, size_threshold=DEFAULT_SIZE_THRESHOLD
             if not compress_files(combined_file.resolve(), dataset, timestamp_key):
                 return False
             
-            if not delete_archives(dataset, archive_ids):
+            if not delete_archives(dataset, [a["id"] for a in archives]):
                 return False
             
-            print(f"Successfully merged and deleted archives {archive_ids[0]} and {archive_ids[1]}")
+            print(f"Successfully merged and deleted archives {archives[0]['id']} and {archives[1]['id']}")
             return True
         finally:
             if temp_dir.exists():
