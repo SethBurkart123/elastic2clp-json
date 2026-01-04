@@ -8,6 +8,8 @@ import json
 import yaml
 import subprocess
 import shutil
+import fcntl
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -32,12 +34,10 @@ def load_credentials():
         return yaml.safe_load(f)
 
 
-def get_stream_output_dir():
-    """Get the stream_output directory from config where extracted JSON goes."""
-    config = load_config()
-    stream_output = config.get("stream_output", {})
-    default_dir = CLP_JSON_DIR / "var" / "data" / "streams"
-    return Path(stream_output.get("directory", default_dir))
+def get_stream_output_dir(dataset):
+    merge_dir = SCRIPT_DIR / "merge" / dataset
+    merge_dir.mkdir(parents=True, exist_ok=True)
+    return merge_dir
 
 
 def get_timestamp_key_from_indexers(dataset):
@@ -65,7 +65,6 @@ def get_db_connection():
 
 
 def get_smallest_archives(dataset, size_threshold):
-    """Find two smallest archives suitable for merging."""
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
@@ -86,8 +85,7 @@ def get_smallest_archives(dataset, size_threshold):
             if len(archives) < 2:
                 return None
 
-            total_size = archives[0][2] + archives[1][2]
-            if total_size >= size_threshold:
+            if archives[0][2] + archives[1][2] >= size_threshold:
                 return None
 
             return [
@@ -99,47 +97,51 @@ def get_smallest_archives(dataset, size_threshold):
 
 
 def extract_archive(archive_id, dataset):
-    """
-    Extract an archive using decompress.sh.
-    
-    The output goes to the stream_output directory configured in clp-config.yaml.
-    """
     decompress_script = CLP_JSON_DIR / "sbin" / "decompress.sh"
     config_path = CLP_JSON_DIR / "etc" / "clp-config.yaml"
-    stream_output_dir = get_stream_output_dir()
+    stream_output_dir = get_stream_output_dir(dataset)
     
-    if stream_output_dir.exists():
-        for item in stream_output_dir.iterdir():
-            if item.is_file():
-                item.unlink()
-            elif item.is_dir():
-                shutil.rmtree(item)
-    stream_output_dir.mkdir(parents=True, exist_ok=True)
+    for item in stream_output_dir.iterdir():
+        if item.is_file():
+            item.unlink()
+        elif item.is_dir():
+            shutil.rmtree(item)
     
-    result = subprocess.run(
-        [str(decompress_script), "-c", str(config_path), "j", str(archive_id), "--dataset", dataset],
-        cwd=CLP_JSON_DIR,
-        capture_output=True,
-        text=True
-    )
+    with open(config_path, 'r') as f:
+        config_content = yaml.safe_load(f)
     
-    if result.returncode != 0:
-        print(f"Error extracting archive {archive_id}: {result.stderr}")
-        return None
+    config_content["stream_output"]["storage"]["directory"] = str(stream_output_dir)
+    temp_config = config_path.with_suffix('.yaml.tmp')
+    with open(temp_config, 'w') as f:
+        yaml.dump(config_content, f)
     
-    json_files = list(stream_output_dir.glob("*.json"))
-    json_files.extend(stream_output_dir.glob("*.jsonl"))
-    
-    for subdir in stream_output_dir.iterdir():
-        if subdir.is_dir():
-            json_files.extend(subdir.glob("*.json"))
-            json_files.extend(subdir.glob("*.jsonl"))
-    
-    return json_files
+    try:
+        result = subprocess.run(
+            [str(decompress_script), "-c", str(temp_config), "j", str(archive_id), "--dataset", dataset],
+            cwd=CLP_JSON_DIR,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            print(f"Error extracting archive {archive_id}: {result.stderr}")
+            return None
+        
+        json_files = list(stream_output_dir.glob("*.json"))
+        json_files.extend(stream_output_dir.glob("*.jsonl"))
+        
+        for subdir in stream_output_dir.iterdir():
+            if subdir.is_dir():
+                json_files.extend(subdir.glob("*.json"))
+                json_files.extend(subdir.glob("*.jsonl"))
+        
+        return json_files
+    finally:
+        if temp_config.exists():
+            temp_config.unlink()
 
 
 def compress_files(input_file, dataset, timestamp_key):
-    """Compress a JSON file into CLP archives."""
     compress_script = CLP_JSON_DIR / "sbin" / "compress.sh"
     config_path = CLP_JSON_DIR / "etc" / "clp-config.yaml"
     
@@ -157,7 +159,6 @@ def compress_files(input_file, dataset, timestamp_key):
 
 
 def delete_archives(dataset, archive_ids):
-    """Delete archives using archive-manager."""
     archive_manager = CLP_JSON_DIR / "sbin" / "admin-tools" / "archive-manager.sh"
     config_path = CLP_JSON_DIR / "etc" / "clp-config.yaml"
     
@@ -175,47 +176,53 @@ def delete_archives(dataset, archive_ids):
 
 
 def merge_archives(dataset, timestamp_key, size_threshold=DEFAULT_SIZE_THRESHOLD):
-    archives = get_smallest_archives(dataset, size_threshold)
-    if not archives:
+    lock_file = f"/tmp/merge_archives_{dataset}.lock"
+    lock_fd = open(lock_file, 'w')
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        lock_fd.close()
         return False
     
-    archive_ids = [a["id"] for a in archives]
-    print(f"Merging archives {archives[0]['id']} and {archives[1]['id']}")
-    
-    temp_dir = CLP_JSON_DIR / "var" / "tmp" / f"merge_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    combined_file = temp_dir / "combined.json"
-    
     try:
-        with open(combined_file, 'w') as outf:
-            for archive in archives:
-                json_files = extract_archive(archive["id"], dataset)
-                
-                if json_files is None:
-                    return False
-                
-                if not json_files:
-                    continue
-                
-                for json_file in json_files:
-                    with open(json_file, 'r') as inf:
-                        for line in inf:
-                            line = line.strip()
-                            if line:
-                                outf.write(line + '\n')
-        
-        if not compress_files(combined_file, dataset, timestamp_key):
+        archives = get_smallest_archives(dataset, size_threshold)
+        if not archives:
             return False
         
-        if not delete_archives(dataset, archive_ids):
-            return False
+        print(f"Merging archives {archives[0]['id']} and {archives[1]['id']}")
         
-        print(f"Successfully merged and deleted archives {archives[0]['id']} and {archives[1]['id']}")
-        return True
+        temp_dir = CLP_JSON_DIR / "var" / "tmp" / f"merge_{dataset}_{os.getpid()}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        combined_file = temp_dir / "combined.json"
         
+        try:
+            with open(combined_file, 'w') as outf:
+                for archive in archives:
+                    json_files = extract_archive(archive["id"], dataset)
+                    if json_files is None:
+                        return False
+                    for json_file in json_files:
+                        with open(json_file, 'r') as inf:
+                            for line in inf:
+                                if line.strip():
+                                    outf.write(line.strip() + '\n')
+            
+            if not compress_files(combined_file, dataset, timestamp_key):
+                return False
+            
+            if not delete_archives(dataset, [a["id"] for a in archives]):
+                return False
+            
+            print(f"Successfully merged and deleted archives {archives[0]['id']} and {archives[1]['id']}")
+            return True
+        finally:
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
     finally:
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+        if Path(lock_file).exists():
+            os.remove(lock_file)
 
 
 def main():

@@ -4,6 +4,9 @@ import fcntl
 import sys
 import argparse
 import subprocess
+import signal
+import time
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from elastic_search import elastic_search
@@ -13,6 +16,9 @@ from merge_archives import merge_archives
 CONFIG_FILE = 'indexers.json'
 STATE_FILE = 'ingestion_state.json'
 MAX_RESULTS = 10000
+CONTINUOUS_INTERVAL = 30
+
+shutdown_requested = False
 
 def parse_datetime(date_string):
     """Parse datetime string in various formats"""
@@ -58,7 +64,7 @@ def load_indexers():
             print(f"Error: Duplicate indexer name '{name}'")
             sys.exit(1)
         
-        required = ['host', 'user', 'password', 'output_dir']
+        required = ['host', 'user', 'password']
         for field in required:
             if field not in idx:
                 print(f"Error: Indexer '{name}' missing required field '{field}'")
@@ -69,7 +75,7 @@ def load_indexers():
             'host': idx['host'],
             'user': idx['user'],
             'password': idx['password'],
-            'output_dir': Path(idx['output_dir']),
+            'output_dir': Path(f"./logs/{name}"),
             'interval': idx.get('interval', 20.0),
             'timestamp_key': idx.get('timestamp_key', 'timestamp')
         }
@@ -83,7 +89,7 @@ def save_indexers_config(config):
         json.dump(config, f, indent=2)
     os.rename(temp_file, CONFIG_FILE)
 
-def add_indexer(name, host, user, password, output_dir, interval=20.0, timestamp_key='timestamp'):
+def add_indexer(name, host, user, password, interval=20.0, timestamp_key='timestamp'):
     """Add a new indexer to the config file"""
     if Path(CONFIG_FILE).exists():
         with open(CONFIG_FILE, 'r') as f:
@@ -104,7 +110,6 @@ def add_indexer(name, host, user, password, output_dir, interval=20.0, timestamp
         'host': host,
         'user': user,
         'password': password,
-        'output_dir': output_dir,
         'interval': float(interval),
         'timestamp_key': timestamp_key
     }
@@ -125,14 +130,33 @@ def save_state(all_indexer_states):
     """Atomically save state to file (per-indexer)"""
     temp_file = f"{STATE_FILE}.tmp"
     state = {'indexers': all_indexer_states}
-    with open(temp_file, 'w') as f:
-        json.dump(state, f, indent=2)
-    os.rename(temp_file, STATE_FILE)
+    
+    with open(f"/tmp/{STATE_FILE}.lock", 'w') as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            with open(temp_file, 'w') as f:
+                json.dump(state, f, indent=2)
+            os.rename(temp_file, STATE_FILE)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 def update_indexer_state(indexer_name, last_ingest_time, all_indexer_states):
     """Update state for a specific indexer"""
     all_indexer_states[indexer_name] = {'last_ingest_time': last_ingest_time.isoformat()}
     save_state(all_indexer_states)
+
+def is_indexer_running(indexer_name):
+    """Check if an indexer is currently running by attempting to acquire lock"""
+    lock_file = f"/tmp/log_ingestion_{indexer_name}.lock"
+    if not Path(lock_file).exists():
+        return False
+    
+    try:
+        with open(lock_file, 'w') as lock_fd:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return False
+    except IOError:
+        return True
 
 def acquire_lock(indexer_name):
     """Acquire exclusive lock for a specific indexer"""
@@ -296,6 +320,10 @@ def ingest_forward(indexer, indexer_name, start_time, end_time, output_path, int
         if compress:
             compress_to_clp_json(indexer_name, indexer['timestamp_key'], output_path.parent)
 
+def signal_handler(signum, frame):
+    global shutdown_requested
+    shutdown_requested = True
+
 def run_indexer(indexer_name, indexer, args, all_indexer_states):
     """Run ingestion for a single indexer"""
     print(f"\n{'='*60}")
@@ -354,7 +382,8 @@ def main():
   %(prog)s --list-indexers              # List all configured indexers
   %(prog)s --interval 10                # Query in 10-minute chunks (overrides config)
   %(prog)s --from-date "2024-10-27 12:00:00"  # Go backwards until 5 empty days
-  %(prog)s --reset                      # Ignore checkpoint, start from 20 mins ago'''
+  %(prog)s --reset                      # Ignore checkpoint, start from 20 mins ago
+  %(prog)s --continuous                 # Run continuously, checking every 30 seconds'''
     )
     
     mode = parser.add_mutually_exclusive_group()
@@ -371,7 +400,7 @@ def main():
                         help='Query interval in minutes (overrides config, can use decimals e.g. 0.5 for 30 seconds)')
     
     parser.add_argument('--add-indexer', action='store_true',
-                        help='Add a new indexer (requires --indexer-name, --host, --user, --password, --output-dir)')
+                        help='Add a new indexer (requires --indexer-name, --host, --user, --password). Output directory will be ./logs/{indexer-name}')
     parser.add_argument('--indexer-name', type=str, metavar='NAME',
                         help='Name for the new indexer (used with --add-indexer)')
     parser.add_argument('--host', type=str, metavar='URL',
@@ -380,22 +409,22 @@ def main():
                         help='Elasticsearch username (used with --add-indexer)')
     parser.add_argument('--password', type=str, metavar='PASSWORD',
                         help='Elasticsearch password (used with --add-indexer)')
-    parser.add_argument('--output-dir', type=str, metavar='DIR',
-                        help='Output directory for logs (used with --add-indexer)')
     parser.add_argument('--timestamp-key', type=str, metavar='KEY',
                         help='Timestamp key field name (used with --add-indexer, default: timestamp). Can be quoted to include spaces.')
     parser.add_argument('--no-clp-json', action='store_true',
                         help='Skip clp-json compression (default: compress to clp-json)')
+    parser.add_argument('--continuous', action='store_true',
+                        help='Run continuously, checking every 30 seconds if ingestion is finished')
     
     args = parser.parse_args()
     
     if args.add_indexer:
-        if not all([args.indexer_name, args.host, args.user, args.password, args.output_dir]):
-            print("Error: --add-indexer requires --indexer-name, --host, --user, --password, and --output-dir")
+        if not all([args.indexer_name, args.host, args.user, args.password]):
+            print("Error: --add-indexer requires --indexer-name, --host, --user, and --password")
             sys.exit(1)
         interval = args.interval if args.interval else 20.0
         timestamp_key = args.timestamp_key if args.timestamp_key else 'timestamp'
-        add_indexer(args.indexer_name, args.host, args.user, args.password, args.output_dir, interval, timestamp_key)
+        add_indexer(args.indexer_name, args.host, args.user, args.password, interval, timestamp_key)
         sys.exit(0)
     
     indexers = load_indexers()
@@ -427,14 +456,69 @@ def main():
         print("Error: No indexers configured. Use --add-indexer to add one.")
         sys.exit(1)
     
-    for indexer_name, indexer in indexers_to_run.items():
-        try:
-            run_indexer(indexer_name, indexer, args, all_indexer_states)
-        except Exception as e:
-            print(f"Failed to process indexer '{indexer_name}': {e}")
-            if len(indexers_to_run) == 1:
-                sys.exit(1)
-            continue
+    if args.continuous:
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        
+        print("Running in continuous mode. Checking every 30 seconds...")
+        print("Press Ctrl+C or send SIGTERM to stop.\n")
+        
+        last_run_times = {}
+        
+        while not shutdown_requested:
+            try:
+                current_indexers = load_indexers()
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"Error loading indexers config: {e}. Retrying in {CONTINUOUS_INTERVAL} seconds...")
+                time.sleep(CONTINUOUS_INTERVAL)
+                continue
+            
+            if args.indexer:
+                if args.indexer not in current_indexers:
+                    print(f"Warning: Indexer '{args.indexer}' not found in config, skipping this cycle")
+                    time.sleep(CONTINUOUS_INTERVAL)
+                    continue
+                indexers_to_run = {args.indexer: current_indexers[args.indexer]}
+            else:
+                indexers_to_run = current_indexers
+            
+            if not indexers_to_run:
+                print("No indexers configured. Waiting for indexers to be added...")
+                time.sleep(CONTINUOUS_INTERVAL)
+                continue
+            
+            all_indexer_states = load_state()
+            
+            for indexer_name, indexer in indexers_to_run.items():
+                if shutdown_requested:
+                    break
+                
+                if is_indexer_running(indexer_name):
+                    continue
+                
+                if time.time() - last_run_times.get(indexer_name, 0) >= CONTINUOUS_INTERVAL:
+                    last_run_times[indexer_name] = time.time()
+                    threading.Thread(
+                        target=run_indexer,
+                        args=(indexer_name, indexer, args, all_indexer_states),
+                        daemon=True
+                    ).start()
+            
+            if not shutdown_requested:
+                time.sleep(CONTINUOUS_INTERVAL)
+        
+        print("\nShutting down gracefully...")
+        for thread in [t for t in threading.enumerate() if t != threading.current_thread() and t.is_alive()]:
+            thread.join(timeout=5)
+    else:
+        for indexer_name, indexer in indexers_to_run.items():
+            try:
+                run_indexer(indexer_name, indexer, args, all_indexer_states)
+            except Exception as e:
+                print(f"Failed to process indexer '{indexer_name}': {e}")
+                if len(indexers_to_run) == 1:
+                    sys.exit(1)
+                continue
 
 if __name__ == "__main__":
     main()

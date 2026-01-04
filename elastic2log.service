@@ -1,0 +1,17 @@
+[Unit]
+Description=Elasticsearch to CLP-JSON Log Ingestion Service
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/elastic2log
+ExecStart=/usr/bin/uv run ingest_logs.py --continuous
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+

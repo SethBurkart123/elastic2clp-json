@@ -77,7 +77,6 @@ Indexers are configured in `indexers.json`. The file is automatically created wh
       "host": "http://prod-es:9200/*/_search",
       "user": "prod_user",
       "password": "prod_pass",
-      "output_dir": "./logs/production",
       "interval": 20.0
     },
     {
@@ -85,7 +84,6 @@ Indexers are configured in `indexers.json`. The file is automatically created wh
       "host": "http://stage-es:9200/*/_search",
       "user": "stage_user",
       "password": "stage_pass",
-      "output_dir": "./logs/staging",
       "interval": 30.0
     }
   ]
@@ -97,7 +95,6 @@ Indexers are configured in `indexers.json`. The file is automatically created wh
 - `host` (required) - Elasticsearch search endpoint URL (include `/*/_search` pattern)
 - `user` (required) - Elasticsearch username
 - `password` (required) - Elasticsearch password
-- `output_dir` (required) - Directory where logs will be temporarily saved before compression (created automatically)
 - `interval` (optional) - Query interval in minutes (default: 20.0)
 - `timestamp_key` (optional) - Field name for timestamps in log documents (default: "timestamp")
 
