@@ -128,12 +128,12 @@ def extract_archive(archive_id, dataset):
             return None
         
         json_files = list(stream_output_dir.glob("*.json"))
-        json_files.extend(stream_output_dir.glob("*.jsonl"))
+        json_files.extend(stream_output_dir.glob("*.json"))
         
         for subdir in stream_output_dir.iterdir():
             if subdir.is_dir():
                 json_files.extend(subdir.glob("*.json"))
-                json_files.extend(subdir.glob("*.jsonl"))
+                json_files.extend(subdir.glob("*.json"))
         
         return json_files
     finally:
