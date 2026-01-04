@@ -48,7 +48,7 @@ def setup_clp_json():
         run_sudo_command(["apt", "update"], password)
         run_sudo_command(["apt", "install", "-y", "wget", "tar"], password)
         
-        if subprocess.run(["docker", "--version"], capture_output=True).returncode != 0:
+        if shutil.which("docker") is None:
             print("Installing Docker...")
             run_sudo_command(["apt", "install", "-y", "docker.io"], password)
             run_sudo_command(["systemctl", "start", "docker"], password)
