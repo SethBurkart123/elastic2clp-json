@@ -49,14 +49,49 @@ def setup_clp_json():
         run_sudo_command(["apt", "install", "-y", "wget", "tar"], password)
         
         if shutil.which("docker") is None:
-            print("Installing Docker...")
-            run_sudo_command(["apt", "install", "-y", "docker.io", "docker-compose-plugin"], password)
-            run_sudo_command(["systemctl", "start", "docker"], password)
-            run_sudo_command(["systemctl", "enable", "docker"], password)
-        if shutil.which("docker-compose") is None:
-            print("Installing Docker Compose plugin...")
-            run_sudo_command(["apt", "install", "-y", "docker-compose-plugin"], password)
-    
+            print("Installing Docker using official repository...")
+            run_sudo_command(["apt", "install", "-y", "ca-certificates", "curl", "gnupg"], password)
+            
+            # Create keyrings directory
+            run_sudo_command(["install", "-m", "0755", "-d", "/usr/share/keyrings"], password)
+            
+            # Download and dearmor the GPG key
+            gpg_key_path = "/usr/share/keyrings/docker-archive-keyring.gpg"
+            curl_gpg_cmd = (
+                f"curl -fsSL https://download.docker.com/linux/ubuntu/gpg | "
+                f"sudo gpg --dearmor -o {gpg_key_path}"
+            )
+            subprocess.run(["bash", "-c", curl_gpg_cmd], check=True)
+            run_sudo_command(["chmod", "a+r", gpg_key_path], password)
+            
+            # Get architecture and codename
+            arch_result = subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True, check=True)
+            arch = arch_result.stdout.strip()
+            
+            codename_result = subprocess.run(["lsb_release", "-cs"], capture_output=True, text=True, check=True)
+            codename = codename_result.stdout.strip()
+            
+            # Add Docker repository using standard .list format
+            repo_line = f"deb [arch={arch} signed-by={gpg_key_path}] https://download.docker.com/linux/ubuntu {codename} stable"
+            
+            echo_cmd = f'echo "{repo_line}" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null'
+            tee_process = subprocess.Popen(
+                ["sudo", "-S", "bash", "-c", echo_cmd],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            tee_process.communicate(input=password + "\n")
+            
+            # Update and install Docker
+            run_sudo_command(["apt", "update"], password)
+            run_sudo_command(
+                ["apt", "install", "-y", "docker-ce", "docker-ce-cli", "containerd.io", 
+                "docker-buildx-plugin", "docker-compose-plugin"], 
+                password
+            )
+
     print("Downloading CLP-JSON...")
     subprocess.run(["wget", CLP_JSON_URL], check=True)
     print("Extracting CLP-JSON...")
