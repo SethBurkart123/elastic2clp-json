@@ -7,6 +7,7 @@ import subprocess
 import signal
 import time
 import threading
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from elastic_search import elastic_search
@@ -19,6 +20,7 @@ MAX_RESULTS = 10000
 CONTINUOUS_INTERVAL = 30
 
 shutdown_requested = False
+logger = logging.getLogger(__name__)
 
 def parse_datetime(date_string):
     """Parse datetime string in various formats"""
@@ -185,7 +187,11 @@ def get_log_filepath(output_dir):
 
 def query_with_splitting(indexer, start_time, end_time, log_file, depth=0):
     """Query a time range, splitting if we hit the limit"""
-    hits = elastic_search(indexer['host'], indexer['user'], indexer['password'], start_time, end_time, MAX_RESULTS)
+    try:
+        hits = elastic_search(indexer['host'], indexer['user'], indexer['password'], start_time, end_time, MAX_RESULTS)
+    except Exception as e:
+        logger.error(f"Query failed for indexer '{indexer.get('name', 'unknown')}' - URL: {indexer['host']}, Time range: {start_time.isoformat()} to {end_time.isoformat()}")
+        raise
     
     if len(hits) >= MAX_RESULTS - 2:
         duration = end_time - start_time
@@ -366,7 +372,9 @@ def run_indexer(indexer_name, indexer, args, all_indexer_states):
                 update_indexer_state(indexer_name, current_time, all_indexer_states)
         
     except Exception as e:
+        logger.error(f"Error during ingestion for '{indexer_name}': {e}", exc_info=True)
         print(f"Error during ingestion for '{indexer_name}': {e}")
+        print(f"  Host URL: {indexer.get('host', 'N/A')}")
         raise
     finally:
         release_lock(lock_fd, lock_file)
@@ -414,8 +422,23 @@ def main():
                         help='Skip clp-json compression (default: compress to clp-json)')
     parser.add_argument('--continuous', action='store_true',
                         help='Run continuously, checking every 30 seconds if ingestion is finished')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug logging')
     
     args = parser.parse_args()
+    
+    if args.debug:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
     
     if args.add_indexer:
         if not all([args.indexer_name, args.host, args.user, args.password]):
