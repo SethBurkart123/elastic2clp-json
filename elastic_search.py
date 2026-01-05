@@ -4,20 +4,27 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def format_timestamp_for_index(dt):
+    """Format datetime as yyyy-MM-dd HH:mm:ss.SSS for Elasticsearch index"""
+    return dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
 def elastic_search(url, username, password, start_time, end_time, max_results=10000):
+    start_str = format_timestamp_for_index(start_time)
+    end_str = format_timestamp_for_index(end_time)
+    
     query = {
         "query": {
             "range": {
                 "timestamp": {
-                    "gte": start_time.isoformat(timespec='milliseconds'),
-                    "lt": end_time.isoformat(timespec='milliseconds')
+                    "gte": start_str,
+                    "lt": end_str
                 }
             }
         },
         "size": max_results
     }
     
-    logger.debug(f"Elasticsearch request - URL: {url}, Time range: {start_time.isoformat()} to {end_time.isoformat()}, Max results: {max_results}")
+    logger.debug(f"Elasticsearch request - URL: {url}, Time range: {start_str} to {end_str}, Max results: {max_results}")
     logger.debug(f"Query body: {query}")
     
     try:
