@@ -118,7 +118,7 @@ def setup_clp_json():
         print("Note: You may need to log out and back in for Docker group changes to take effect.")
     
     print("Starting CLP-JSON services...")
-    subprocess.run(["sbin/start-clp.sh"], cwd=CLP_JSON_DIR, check=True)
+    subprocess.run(["sg", "docker", "-c", f"cd {CLP_JSON_DIR} && sbin/start-clp.sh"], check=True)
     
     if is_clp_json_setup():
         print("CLP-JSON setup completed successfully!")
